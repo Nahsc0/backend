@@ -1,0 +1,81 @@
+name: Deploy to backend
+on:
+  push:
+    branches: ['main']
+
+jobs:
+  deploy_to_frontend:
+    runs-on: ubuntu-latest
+
+    steps:
+      - name: Checkout
+        uses: actions/Checkout@v2
+
+      - name: SSH to backend to Deploy
+        uses: appleboy/ssh-action@master
+        with:
+          host: ${{ secrets.HOSTNAME }}
+          username: ${{ secrets.USERNAME }}
+          key: ${{ secrets.AWS_PRIVATE_KEY }}
+          script: |-
+            echo "******************"
+            echo "Installing neccessary dependencies for client instance"
+            echo "*******************"
+                      
+            sudo apt-get update
+            sudo apt-get install git -y
+                      
+            sudo apt-get install curl
+            sudo curl https://raw.githubusercontent.com/creationix/nvm/master/install.sh | bash
+            export NVM_DIR="$HOME/.nvm"
+            [ -s "$NVM_DIR/nvm.sh" ] && \. "$NVM_DIR/nvm.sh" 
+            [ -s "$NVM_DIR/bash_completion" ] && \. "$NVM_DIR/bash_completion"
+                      
+            nvm install 18
+            sudo apt-get install npm -y
+            nvm alias default 18
+            npm -v
+            node -v
+                      
+            echo "-----PM2------"
+            sudo npm install -g pm2
+            sudo pm2 startup systemd
+                      
+            echo "-----NGINX------"
+            sudo apt-get install -y nginx
+                      
+            echo "---FIREWALL---"
+            sudo ufw allow OpenSSH
+            sudo ufw allow 'Nginx Full'
+            sudo ufw --force enable 
+
+            echo "******************"
+            echo "Performing the following actions on client instance"
+            echo "*******************"
+
+            sudo rm -rf backend || true
+            git clone https://github.com/Nahsc0/backend.git
+            cd backend
+            sudo npm install
+            sudo pm2 kill
+            sudo kill $(lsof -nt -i4TCP:5000)
+            sudo pm2 start index.js --name "backend"
+
+
+            sudo tee /etc/nginx/sites-available/myapp.conf > /dev/null <<EOF
+            server {
+                listen 80 default_server;
+                server_name _;  
+
+                location / {
+                    proxy_pass http://localhost:5000/posts;
+                }
+            }
+            EOF
+
+
+            sudo rm -rf /etc/nginx/sites-enabled/default
+            sudo ln -s /etc/nginx/sites-available/myapp.conf /etc/nginx/sites-enabled/
+            sudo nginx -t
+            sudo systemctl restart nginx
+            
